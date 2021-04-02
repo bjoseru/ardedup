@@ -1,0 +1,64 @@
+#! ./venv/bin/python3
+#
+# ARDEDUP - ARchiver and DEDUPlicator
+#
+# Scan directory trees and extract images (and other fileformats) and
+# store them in a unified location, while preserving information about
+# the source location. During this preservation stage, exact
+# duplicates (same sha1 hash) are removed, even though information
+# about all identical copies is preserved. In a secondary stage a
+# perceptial difference hash for image file is used to identify images
+# that appear to be the same, even though they may have different
+# resolutions or have been edited for colour, sharpness, etc. These
+# images are then clustered together.
+# 
+# Copyright (C) 2021 by Björn Rüffer
+
+
+import dhash                    # for difference hashes
+import typer                    # CLI handling
+import pathlib
+import os
+import pretty_errors
+# from rich import print
+from rich.console import Console
+print = Console().print
+import hashlib
+
+
+
+app = typer.Typer()
+
+def get_info(de: os.DirEntry):
+    if not de.is_dir():
+        with open(de.path,'rb') as f:
+            sha1 = hashlib.sha1(f.read()).hexdigest()
+    return {
+        'path': pathlib.Path(de.path).absolute().__str__(),
+        # 'path': (pathlib.Path('.') / pathlib.Path(de.path)).absolute().__str__(),
+        'size': de.stat().st_size,
+        # 'type': de.stat().st_type,
+        # 'fstype': de.stat().st_fstype,
+        'dev': de.stat().st_dev,
+        'atime': de.stat().st_atime_ns,  # Time of most recent access expressed in nanoseconds as an integer
+        'ctime': de.stat().st_ctime_ns,  # Time of most recent content modification expressed in nanoseconds as an integer
+        'mtime': de.stat().st_mtime_ns,  # the time of most recent metadata change on Unix / the time of creation on Windows, expressed in nanoseconds as an integer
+        'sha1': sha1 if not de.is_dir() else None
+    }
+
+@app.command()
+def scan(directory: str="."):
+    directory = pathlib.Path(directory)
+    with os.scandir(directory) as dir:
+        for entry in dir:
+            # if not entry.name.startswith('.') and entry.is_file():
+            print(get_info(entry))
+
+    
+if __name__ == "__main__":
+    app()
+
+# Local Variables:
+# mode: python
+# pyvenv-workon: ~/Documents/Software/ardedup/venv
+# End:
