@@ -1,4 +1,4 @@
-#! ./venv/bin/python3
+#!/Users/bsr047/Documents/Software/ardedup/venv/bin/python3
 #
 # ARDEDUP - ARchiver and DEDUPlicator
 #
@@ -14,7 +14,6 @@
 # 
 # Copyright (C) 2021 by Björn Rüffer
 
-
 import dhash                    # for difference hashes
 import typer                    # CLI handling
 import pathlib
@@ -24,39 +23,214 @@ import pretty_errors
 from rich.console import Console
 print = Console().print
 import hashlib
+import collections
+import shutil
+import imghdr
+import tqdm
+import colorama
+# import sys
+# print(sys.version)
+from PIL import Image
+import os.path
+import re
+from tinydb import TinyDB, Query
+from tinydb.storages import JSONStorage
+from tinydb.middlewares import CachingMiddleware
+import atexit
 
-
+File = collections.namedtuple('File', [
+    'path',
+    'sha1',
+    'diskname',
+    'dev',
+    'size',
+    'atime',
+    'ctime',
+    'mtime',
+    'imgtype',
+    'dhash128',
+    'im_mode',
+    'im_size',
+    ],defaults = [None] * 11)
 
 app = typer.Typer()
+db = TinyDB('data.json',
+            storage=CachingMiddleware(JSONStorage),
+            # sort_keys=True,
+            indent=4,
+            separators=(',', ': '))
+Entry = Query()
 
-def get_info(de: os.DirEntry):
-    if not de.is_dir():
-        with open(de.path,'rb') as f:
-            sha1 = hashlib.sha1(f.read()).hexdigest()
-    return {
+def cleanup():
+    db.close()
+    print('Bye now.')
+
+atexit.register(cleanup)
+# atexit.register(db.close)
+
+def get_info(diskname: str, de: os.DirEntry):
+    'internal function to produce the information needed about individual files, especially images'
+    sha1 = None
+    imgtype = None
+    dhash128 = None
+    im_mode = None
+    im_size = None
+    if de.is_file():
+        try:
+            with open(de.path,'rb') as f:
+                sha1 = hashlib.sha1(f.read()).hexdigest()
+        except PermissionError:
+            pass
+        try:    
+            imgtype = imghdr.what(de.path)
+        except (FileNotFoundError, IsADirectoryError):
+            pass
+
+    if sha1 and imgtype:
+        try:
+            image = Image.open(de.path)
+            row, col = dhash.dhash_row_col(image)
+            im_mode = image.mode
+            im_size = image.size
+            dhash128 = dhash.format_hex(row, col)
+            image.close()
+        except OSError:
+            pass
+        
+    return File(**{
         'path': pathlib.Path(de.path).absolute().__str__(),
-        # 'path': (pathlib.Path('.') / pathlib.Path(de.path)).absolute().__str__(),
         'size': de.stat().st_size,
-        # 'type': de.stat().st_type,
-        # 'fstype': de.stat().st_fstype,
+        'imgtype': imgtype,
+        'dhash128': dhash128,
+        'diskname': diskname,
         'dev': de.stat().st_dev,
         'atime': de.stat().st_atime_ns,  # Time of most recent access expressed in nanoseconds as an integer
         'ctime': de.stat().st_ctime_ns,  # Time of most recent content modification expressed in nanoseconds as an integer
         'mtime': de.stat().st_mtime_ns,  # the time of most recent metadata change on Unix / the time of creation on Windows, expressed in nanoseconds as an integer
-        'sha1': sha1 if not de.is_dir() else None
-    }
+        'sha1': sha1,
+        'im_mode' : im_mode,
+        'im_size' : im_size,        
+    })
+
+def copy_file(fileinfo: File):
+    data = pathlib.Path('./data')
+    try:
+        os.mkdir(data)
+    except FileExistsError:
+        pass
+    try:
+        os.mkdir(data / fileinfo.sha1[:2])
+    except FileExistsError:
+        pass
+    dst = data / fileinfo.sha1[:2] / fileinfo.sha1[2:]
+    try:
+        stat = os.stat(dst)
+        if stat.st_size != fileinfo.size:
+            shutil.copyfile(fileinfo.path, dst)
+    except FileNotFoundError:
+        shutil.copyfile(fileinfo.path, dst)
 
 @app.command()
-def scan(directory: str="."):
-    directory = pathlib.Path(directory)
-    with os.scandir(directory) as dir:
-        for entry in dir:
-            # if not entry.name.startswith('.') and entry.is_file():
-            print(get_info(entry))
+def scan(
+        directory: str = typer.Argument(...,
+        help=""" Indicates the directory to archive and deduplicate. This program
+            only makes copies of files in that directory (under ./data/),
+            and will not write to the directory itself (in particular,
+            files are not moved, but copied)."""),
+        diskname: str = typer.Argument("",
+            help="""The name of a (possibly external) disk containing the directory to
+            be scanned. This is stored along with every file to
+            indicate the source disk (e.g., when cataloging a large
+            set of external hard drives, which was the motivation for
+            this software)."""),
+        filetypes: str = typer.Option(r'rgb|gif|pbm|pgm|ppm|tiff?|rast|xbm|jpe?g|bmp|png|webp|exr|docx?|odf|pdf|rtf',
+
+            help="""A regular expression listing the file formats to archive. 
+            This would commonly be a subset of the image formats listed here 
+            as default, plus any custom range of document (or other file) formats. 
+            Note that only supported image formats will be dhashed."""),
+        
+    ):
+    """Scan a given directory for image files and documents. Store these
+    files under ./data/ with filenames corresponding to sha1 hashes of
+    the content. This removes duplicates.
+
+    In addition, create a database of the files at ./data.json, which
+    contains additional information about each image, such as format,
+    size, and a difference hash, which can be used to identify similar
+    images even if they are edited versions of each other, such as
+    rescaled in size (small Hamming distance of the dhash indicates
+    stronger similarity).
+    """
+    try:
+        directory = pathlib.Path(directory)
+        subdirs = list()
+        # print(f'Scanning {directory}:')
+        with os.scandir(directory) as dir:
+            for entry in tqdm.tqdm(dir, desc = f'{colorama.Style.DIM}{directory.absolute()}{colorama.Style.RESET_ALL}', leave=True, colour='#555500', total=os.stat(directory).st_nlink-2):
+                if re.match(str(filetypes),
+                            os.path.basename(entry.path).split('.')[-1].lower()):
+                    info = get_info(diskname, entry)
+                    if info and info.sha1: # and info.dhash128:
+                        copy_file(info)
+                        try:
+                            db.upsert(info._asdict(),
+                                      (Entry.path == info.path) & (Entry.sha1 == info.sha1))
+                        except ValueError as e:
+                            pass
+                            # print(info)
+                            # print(e)
+                if entry.is_dir():
+                    subdirs.append(entry.path)
+        for sd in subdirs:
+            scan(sd, diskname)
+    except (NotADirectoryError, TypeError) as e:
+        print('Directory argument needs to be a directory.')
+        # print(e)
+        # print(type(str(filetypes)))
+        raise typer.Exit(1)
+
+@app.command()
+def stat(ls_disks: bool= typer.Option(False, help="List all known disks."),
+         ):
+         # other_option: bool = typer.Option(..., help="I don't know what to say.")
+    """
+    Provide statistics about the ./data.json database.
+    """
+    entries = db.all()
+    print(f'Number of DB entries: {len(entries)}')
+    entries = [File(**dict(e)) for e in entries]
+    sha1s = {e.sha1 for e in entries}
+    print(f'Different sha1 values: {len(sha1s)}')
+
+    
+    if ls_disks:
+        disks = {e.diskname for e in entries}
+        print(f'I have stored files form {len(disks)} disks:')
+        print(sorted(tuple(disks)))
+    pass
+
+@app.callback()
+def callback():
+    """Scan directory trees and extract images (and other fileformats) and
+    store them in a unified location, while preserving information
+    about the source location. During this preservation stage, exact
+    duplicates (same sha1 hash) are removed, even though information
+    about all identical copies is preserved. In a secondary stage a
+    perceptial difference hash for image file is used to identify
+    images that appear to be the same, even though they may have
+    different resolutions or have been edited for colour, sharpness,
+    etc. These images are then clustered together.
+
+    Copyright (C) 2021 by Björn Rüffer
+    """
+    pass
+    
 
     
 if __name__ == "__main__":
     app()
+
 
 # Local Variables:
 # mode: python
