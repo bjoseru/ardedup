@@ -38,6 +38,7 @@ from tinydb.storages import JSONStorage
 from tinydb.middlewares import CachingMiddleware
 import atexit
 from tabulate import tabulate
+from typing import List
 
 File = collections.namedtuple('File', [
     'path',
@@ -133,28 +134,31 @@ def copy_file(fileinfo: File):
 
 @app.command()
 def scan(
-        directory: str = typer.Argument(...,
-        help=""" Indicates the directory to archive and deduplicate. This program
-            only makes copies of files in that directory (under ./data/),
-            and will not write to the directory itself (in particular,
-            files are not moved, but copied)."""),
-        diskname: str = typer.Argument("",
-            help="""The name of a (possibly external) disk containing the directory to
+        directories: List[str] = typer.Argument(...,
+        help=re.sub("\s\s+" , " ", """Indicates the list of directories to archive and deduplicate. This
+        program only makes copies of files in the directories
+        (under ./data/), and will not write to the directories
+        itself (in particular, files are not moved, but
+        copied).
+        """)),
+        diskname: str = typer.Option("",
+            help=re.sub("\s\s+" , " ", """The name of a (possibly external) disk containing the directories to
             be scanned. This is stored along with every file to
             indicate the source disk (e.g., when cataloging a large
             set of external hard drives, which was the motivation for
-            this software)."""),
+            this software).""")),
         filetypes: str = typer.Option(r'rgb|gif|pbm|pgm|ppm|tiff?|rast|xbm|jpe?g|bmp|png|webp|exr|docx?|odf|pdf|rtf',
 
-            help="""A regular expression listing the file formats to archive. 
+            help=re.sub("\s\s+" , " ", """A regular expression listing the file formats to archive. 
             This would commonly be a subset of the image formats listed here 
             as default, plus any custom range of document (or other file) formats. 
-            Note that only supported image formats will be dhashed."""),
+            Note that only supported image formats will be dhashed.""")),
         
     ):
-    """Scan a given directory for image files and documents. Store these
-    files under ./data/ with filenames corresponding to sha1 hashes of
-    the content. This removes duplicates.
+    """Scan a given directory or list of directories for image files and
+    documents. Store these files under ./data/ with filenames
+    corresponding to sha1 hashes of the content. This removes
+    duplicates.
 
     In addition, create a database of the files at ./data.json, which
     contains additional information about each image, such as format,
@@ -162,34 +166,36 @@ def scan(
     images even if they are edited versions of each other, such as
     rescaled in size (small Hamming distance of the dhash indicates
     stronger similarity).
+
     """
-    try:
-        directory = pathlib.Path(directory)
-        subdirs = list()
-        # print(f'Scanning {directory}:')
-        with os.scandir(directory) as dir:
-            for entry in tqdm.tqdm(dir, desc = f'{colorama.Style.DIM}{directory.absolute()}{colorama.Style.RESET_ALL}', leave=True, colour='#555500', total=os.stat(directory).st_nlink-2):
-                if re.match(str(filetypes),
-                            os.path.basename(entry.path).split('.')[-1].lower()):
-                    info = get_info(diskname, entry)
-                    if info and info.sha1: # and info.dhash128:
-                        copy_file(info)
-                        try:
-                            db.upsert(info._asdict(),
-                                      (Entry.path == info.path) & (Entry.sha1 == info.sha1))
-                        except ValueError as e:
-                            pass
-                            # print(info)
-                            # print(e)
-                if entry.is_dir():
-                    subdirs.append(entry.path)
-        for sd in subdirs:
-            scan(sd, diskname)
-    except (NotADirectoryError, TypeError) as e:
-        print('Directory argument needs to be a directory.')
-        # print(e)
-        # print(type(str(filetypes)))
-        raise typer.Exit(1)
+    for directory in directories:
+        try:
+            directory = pathlib.Path(directory)
+            subdirs = list()
+            # print(f'Scanning {directory}:')
+            with os.scandir(directory) as dir:
+                for entry in tqdm.tqdm(dir, desc = f'{colorama.Style.DIM}{directory.absolute()}{colorama.Style.RESET_ALL}', leave=True, colour='#555500', total=os.stat(directory).st_nlink-2):
+                    if re.match(str(filetypes),
+                                os.path.basename(entry.path).split('.')[-1].lower()):
+                        info = get_info(diskname, entry)
+                        if info and info.sha1: # and info.dhash128:
+                            copy_file(info)
+                            try:
+                                db.upsert(info._asdict(),
+                                          (Entry.path == info.path) & (Entry.sha1 == info.sha1))
+                            except ValueError as e:
+                                pass
+                                # print(info)
+                                # print(e)
+                    if entry.is_dir():
+                        subdirs.append(entry.path)
+            if subdirs:
+                scan(subdirs, diskname=diskname)
+        except (NotADirectoryError, TypeError) as e:
+            print('Directory argument needs to be a directory.')
+            # print(e)
+            # print(type(str(filetypes)))
+            raise typer.Exit(1)
 
 subapp = typer.Typer()
 @subapp.callback()
