@@ -132,6 +132,40 @@ def copy_file(fileinfo: File):
     except FileNotFoundError:
         shutil.copyfile(fileinfo.path, dst)
 
+def _scan(directories,diskname,filetypes):
+    'the actual scanner, needed for recursion'
+    for directory in directories:
+        directory = pathlib.Path(directory)
+        subdirs = list()
+        # print(f'Scanning {directory}:')
+        with os.scandir(directory) as dir:
+            copied = 0
+            for entry in tqdm.tqdm(dir, desc = f'{colorama.Style.DIM}{directory.absolute()}{colorama.Style.RESET_ALL}', leave=True, colour='#555500', total=os.stat(directory).st_nlink-2):
+                if entry.is_dir():
+                    subdirs.append(entry.path)
+                    # print(f'add "{entry.path}" to scan list')
+                elif re.match(filetypes,
+                            os.path.basename(entry.path).split('.')[-1].lower()):
+                    # print(f"MATCH: {os.path.basename(entry.path).split('.')[-1].lower()} in {filetypes}.")
+                    info = get_info(diskname, entry)
+                    if info and info.sha1: # and info.dhash128:
+                        copy_file(info)
+                        copied += 1
+                        try:
+                            db.upsert(info._asdict(),
+                                      (Entry.path == info.path) & (Entry.sha1 == info.sha1))
+                        except ValueError as e:
+                            print(f'[bold]encourered ValueError: {e}[/bold]')
+                    # else:
+                    #     print(f'File {info.path} {info.sha1}.')
+                # else:
+                #     print(f"File {os.path.basename(entry.path).lower()}:")
+                #     print(f"Filetype {os.path.basename(entry.path).split('.')[-1].lower()} not in the list {filetypes}.")
+            print(f'Copied {copied} files from "{directory}".')
+        if subdirs:
+            # print(subdirs)
+            scan(list(subdirs), diskname=diskname, filetypes=filetypes)
+
 @app.command()
 def scan(
         directories: List[str] = typer.Argument(...,
@@ -147,7 +181,7 @@ def scan(
             indicate the source disk (e.g., when cataloging a large
             set of external hard drives, which was the motivation for
             this software).""")),
-        filetypes: str = typer.Option(r'rgb|gif|pbm|pgm|ppm|tiff?|rast|xbm|jpe?g|bmp|png|webp|exr|docx?|odf|pdf|rtf',
+        filetypes: str = typer.Option(r'rgb|gif|pbm|pgm|ppm|tiff?|rast|xbm|jpe?g|bmp|png|webp|exr|docx?|odf|pdf|rtf|txt',
 
             help=re.sub("\s\s+" , " ", """A regular expression listing the file formats to archive. 
             This would commonly be a subset of the image formats listed here 
@@ -168,35 +202,9 @@ def scan(
     stronger similarity).
 
     """
-    for directory in directories:
-        try:
-            directory = pathlib.Path(directory)
-            subdirs = list()
-            # print(f'Scanning {directory}:')
-            with os.scandir(directory) as dir:
-                for entry in tqdm.tqdm(dir, desc = f'{colorama.Style.DIM}{directory.absolute()}{colorama.Style.RESET_ALL}', leave=True, colour='#555500', total=os.stat(directory).st_nlink-2):
-                    if re.match(str(filetypes),
-                                os.path.basename(entry.path).split('.')[-1].lower()):
-                        info = get_info(diskname, entry)
-                        if info and info.sha1: # and info.dhash128:
-                            copy_file(info)
-                            try:
-                                db.upsert(info._asdict(),
-                                          (Entry.path == info.path) & (Entry.sha1 == info.sha1))
-                            except ValueError as e:
-                                pass
-                                # print(info)
-                                # print(e)
-                    if entry.is_dir():
-                        subdirs.append(entry.path)
-            if subdirs:
-                scan(subdirs, diskname=diskname)
-        except (NotADirectoryError, TypeError) as e:
-            print('Directory argument needs to be a directory.')
-            # print(e)
-            # print(type(str(filetypes)))
-            raise typer.Exit(1)
-
+    filetypes = re.compile(filetypes)
+    _scan(directories, diskname, filetypes)
+    
 subapp = typer.Typer()
 @subapp.callback()
 def subapp_callback():
@@ -295,7 +303,14 @@ def stat():
         ('Image files (non-unique)', sum((1 for e in entries if e.imgtype))),
         ('Image files (unique)', len({e.sha1 for e in entries if e.imgtype})),
         ('Image dhash128 (unique)', len({e.dhash128 for e in entries if e.dhash128})),
-        ('Total storage used', sizeof_fmt(sum((e.size for e in entries)),fill=False))
+        ('Combinded file sizes', sizeof_fmt(sum((e.size for e in entries)),fill=False)),
+        ('Combinded image file sizes', sizeof_fmt(sum((e.size for e in entries if e.imgtype)),fill=False)),
+        ('Total storage used', sizeof_fmt(sum(
+            dict((e.sha1, e.size) for e in entries).values()
+        ),fill=False)),
+        ('Total storage used by images', sizeof_fmt(sum(
+            dict((e.sha1, e.size) for e in entries if e.imgtype).values()
+        ),fill=False)),
     ]
     print(tabulate(stats, headers=['Statistic','#']))
         
