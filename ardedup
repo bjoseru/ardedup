@@ -62,7 +62,10 @@ db = TinyDB('data.json',
             indent=4,
             separators=(',', ': '))
 Entry = Query()
+scanned_dirs = db.table('scanned_directories')
 error_list = list()
+
+
 
 def cleanup():
     db.close()
@@ -138,8 +141,12 @@ def copy_file(fileinfo: File):
     except FileExistsError:
         pass
     dst = data / fileinfo.sha1[:2] / fileinfo.sha1[2:]
-    stat = os.stat(dst)
-    if not fileinfo.sha1 and (stat.st_size != fileinfo.size):
+    try:
+        copy_anyway = False
+        stat = os.stat(dst)
+    except FileNotFoundError as e:
+        copy_anyway = True
+    if copy_anyway or (not fileinfo.sha1 and (stat.st_size != fileinfo.size)):
         try:
             try:
                 shutil.copyfile(fileinfo.path, dst)
@@ -154,6 +161,21 @@ def copy_file(fileinfo: File):
 def _scan(directories,diskname,filetypes):
     'the actual scanner, needed for recursion'
     for directory in directories:
+        try:
+            if not os.stat(directory).is_dir():
+                print(f'"{directory}" does not appear to be a directory, skipping')
+                continue
+        except FileNotFoundError:
+            print(f'"{directory}" does not appear to exist, skipping')
+            continue
+            
+        
+        if scanned_dirs.contains((Entry.dir == str(pathlib.Path(directory).absolute())) & (Entry.disk == str(diskname))):
+            # print(f'Directory {directory} has already been scanned.')
+            continue
+        # else:
+        #     print(f'Directory {directory} on {diskname} not scanned yet?!')
+
         directory = pathlib.Path(directory)
         subdirs = list()
         # print(f'Scanning {directory}:')
@@ -176,6 +198,12 @@ def _scan(directories,diskname,filetypes):
                                       (Entry.path == info.path) & (Entry.sha1 == info.sha1))
                         except ValueError as e:
                             print(f'[bold]encourered ValueError: {e}[/bold]')
+                        except TypeError as e:
+                            print(e)
+                            print(info)
+                            error_list.append(f'{str(info)}, e')
+                            raise typer.Exit(1)
+                    
                     # else:
                     #     print(f'File {info.path} {info.sha1}.')
                 # else:
@@ -185,6 +213,10 @@ def _scan(directories,diskname,filetypes):
         if subdirs:
             # print(subdirs)
             scan(list(subdirs), diskname=diskname, filetypes=filetypes)
+        scanned_dirs.insert({
+            'dir': str(directory),
+            'disk': str(diskname),
+        })
 
 @app.command()
 def scan(
