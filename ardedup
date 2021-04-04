@@ -83,10 +83,16 @@ def get_info(diskname: str, de: os.DirEntry):
                 sha1 = hashlib.sha1(f.read()).hexdigest()
         except PermissionError:
             pass
+        except OSError as e:
+            # print('Encountered an OSError', e)
+            typer.echo()
+            typer.echo(typer.style(fr'Cannot SHA1 file: "{de.path}"',bg="red",fg="white"))
+            # raise typer.Exit()
         try:    
             imgtype = imghdr.what(de.path)
-        except (FileNotFoundError, IsADirectoryError):
+        except (FileNotFoundError, IsADirectoryError, OSError):
             pass
+
 
     if sha1 and imgtype:
         try:
@@ -125,12 +131,16 @@ def copy_file(fileinfo: File):
     except FileExistsError:
         pass
     dst = data / fileinfo.sha1[:2] / fileinfo.sha1[2:]
-    try:
-        stat = os.stat(dst)
-        if stat.st_size != fileinfo.size:
-            shutil.copyfile(fileinfo.path, dst)
-    except FileNotFoundError:
-        shutil.copyfile(fileinfo.path, dst)
+    stat = os.stat(dst)
+    if not fileinfo.sha1 and (stat.st_size != fileinfo.size):
+        try:
+            try:
+                shutil.copyfile(fileinfo.path, dst)
+            except FileNotFoundError:
+                shutil.copyfile(fileinfo.path, dst)
+        except OSError as e:
+            typer.echo()
+            typer.echo(typer.style(f'Cannot copy file: "{de.path}"',bg="red",fg="white"))
 
 def _scan(directories,diskname,filetypes):
     'the actual scanner, needed for recursion'
@@ -145,7 +155,8 @@ def _scan(directories,diskname,filetypes):
                     subdirs.append(entry.path)
                     # print(f'add "{entry.path}" to scan list')
                 elif re.match(filetypes,
-                            os.path.basename(entry.path).split('.')[-1].lower()):
+                              os.path.basename(entry.path).split('.')[-1].lower()) and \
+                              not db.contains(Entry.name == pathlib.Path(entry.path).absolute().__str__()):
                     # print(f"MATCH: {os.path.basename(entry.path).split('.')[-1].lower()} in {filetypes}.")
                     info = get_info(diskname, entry)
                     if info and info.sha1: # and info.dhash128:
