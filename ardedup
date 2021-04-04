@@ -37,6 +37,7 @@ from tinydb import TinyDB, Query
 from tinydb.storages import JSONStorage
 from tinydb.middlewares import CachingMiddleware
 import atexit
+from tabulate import tabulate
 
 File = collections.namedtuple('File', [
     'path',
@@ -190,26 +191,108 @@ def scan(
         # print(type(str(filetypes)))
         raise typer.Exit(1)
 
+subapp = typer.Typer()
+@subapp.callback()
+def subapp_callback():
+    "Provide various listings of the ./data.json database."
+    pass
+
+@subapp.command()
+def disks():
+    "List all known disks."
+    entries = db.all()
+    entries = [File(**dict(e)) for e in entries]
+    disks = {e.diskname for e in entries}
+    disks = [
+        (d,
+         sum(1 for e in entries if e.diskname == d),
+         sum(1 for e in entries if (e.diskname == d) and (e.dhash128))
+         )
+        for d in sorted(tuple(disks))]
+    print(tabulate(disks,headers = ['Disk name', 'Total entries', 'Images']))
+
+def sizeof_fmt(num,fill=True):
+    for unit in ['B','k','M','G','T','P','E','Z']:
+        if abs(num) < 1024.0:
+            s = '%.0f%s' % (num, unit)
+            if fill:
+                return f'{"_"*(5-len(s))}{s}'
+            else:
+                return s
+            # return re.sub('0','_', '%04.0f%s' % (num, unit))
+        num /= 1024.0
+    return "%.0f%s" % (num, 'YB')
+
+@subapp.command()
+def files(
+        disk_regex: str = typer.Option("", help="Restrict output to a particular disk names (given as case-insensitieve regex)."),
+        file_regex: str = typer.Option("", help="Restrict output to a particular file names (given as case-insensitive regex)."),
+        min_img_size: tuple[int,int] = typer.Option((0,0), help="Restrict output to image files of minimum dimension."),
+        max_img_size: tuple[int,int] = typer.Option((0,0), help="Restrict output to image files of maximal dimension ((0,0) disables this)."),
+        min_size: int = typer.Option(None, help="Restrict output to files of given minimal size (in bytes)."),
+        max_size: int = typer.Option(None, help="Restrict output to files of given maximal size (in bytes)."),
+        img_type_regex: str = typer.Option(None, help="Restrict output to image files of particular type (regex)."),
+    ):
+    "List files in database."
+    entries = db.all()
+    entries = [File(**dict(e)) for e in entries]
+
+    if min_size:
+        entries = [e for e in entries if e.size >= min_size]
+    if max_size:
+        entries = [e for e in entries if e.size <= max_size]
+    if img_type_regex:
+        entries = [e for e in entries if e.imgtype and re.match(img_type_regex,e.imgtype)]
+
+    if sum(min_img_size) > 0:
+        # file_list = [(path, disk, sha1, size, imgtype, imgsize)
+        #              for (path, disk, sha1, size, imgtype, imgsize) in file_list
+        #              if imgsize and (imgsize[0]>=min_img_size[0]) and (imgsize[1]>=min_img_size[1])]
+        entries = [e for e in entries
+                   if e.im_size and (e.im_size[0]>=min_img_size[0]) and (e.im_size[1]>=min_img_size[1])]
+    if sum(max_img_size) > 0:
+        # file_list = [(path, disk, sha1, size, imgtype, imgsize)
+        #              for (path, disk, sha1, size, imgtype, imgsize) in file_list
+        #              if imgsize and (imgsize[0]<=max_img_size[0]) and (imgsize[1]<=max_img_size[1])]
+        entries = [e for e in entries
+                   if e.im_size and (e.im_size[0]<=max_img_size[0]) and (e.im_size[1]<=max_img_size[1])]
+    
+    file_list = [
+        (f'"{e.path}"',
+         e.diskname,
+         # f'/{e.sha1[:6]}',
+         f'/{e.sha1[:2]}/{e.sha1[2:]}',
+         sizeof_fmt(e.size),
+         e.imgtype,
+         e.im_size,
+         )
+        for e in entries if (re.search(disk_regex,e.diskname,re.I) and re.search(file_regex, e.path,re.I))]
+
+        
+    file_list.sort(key = lambda f: f[0])
+    print(tabulate(file_list,headers = ['File', 'Disk', 'SHA1', 'Size', 'ImgType', 'ImgSize']))
+    
+    
+app.add_typer(subapp, name='ls')
+    
 @app.command()
-def stat(ls_disks: bool= typer.Option(False, help="List all known disks."),
-         ):
-         # other_option: bool = typer.Option(..., help="I don't know what to say.")
+def stat():
     """
     Provide statistics about the ./data.json database.
     """
     entries = db.all()
-    print(f'Number of DB entries: {len(entries)}')
     entries = [File(**dict(e)) for e in entries]
     sha1s = {e.sha1 for e in entries}
-    print(f'Different sha1 values: {len(sha1s)}')
-
-    
-    if ls_disks:
-        disks = {e.diskname for e in entries}
-        print(f'I have stored files form {len(disks)} disks:')
-        print(sorted(tuple(disks)))
-    pass
-
+    stats = [
+        ('Total db entries', len(entries)),
+        ('Unique SHA1s', len(sha1s)),
+        ('Image files (non-unique)', sum((1 for e in entries if e.imgtype))),
+        ('Image files (unique)', len({e.sha1 for e in entries if e.imgtype})),
+        ('Image dhash128 (unique)', len({e.dhash128 for e in entries if e.dhash128})),
+        ('Total storage used', sizeof_fmt(sum((e.size for e in entries)),fill=False))
+    ]
+    print(tabulate(stats, headers=['Statistic','#']))
+        
 @app.callback()
 def callback():
     """Scan directory trees and extract images (and other fileformats) and
