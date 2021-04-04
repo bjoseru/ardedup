@@ -62,9 +62,14 @@ db = TinyDB('data.json',
             indent=4,
             separators=(',', ': '))
 Entry = Query()
+error_list = list()
 
 def cleanup():
     db.close()
+    if error_list:
+        typer.echo("I encountered the following problems:")
+        for e in error_list:
+            typer.echo(e)
     print('Bye now.')
 
 atexit.register(cleanup)
@@ -86,7 +91,9 @@ def get_info(diskname: str, de: os.DirEntry):
         except OSError as e:
             # print('Encountered an OSError', e)
             typer.echo()
-            typer.echo(typer.style(fr'Cannot SHA1 file: "{de.path}"',bg="red",fg="white"))
+            message = fr'Cannot SHA1 file: "{de.path}"'
+            typer.echo(typer.style(message,bg="red",fg="white"))
+            error_list.append(message)
             # raise typer.Exit()
         try:    
             imgtype = imghdr.what(de.path)
@@ -140,7 +147,9 @@ def copy_file(fileinfo: File):
                 shutil.copyfile(fileinfo.path, dst)
         except OSError as e:
             typer.echo()
-            typer.echo(typer.style(f'Cannot copy file: "{de.path}"',bg="red",fg="white"))
+            message = f'Cannot copy file: "{de.path}"'
+            typer.echo(typer.style(message,bg="red",fg="white"))
+            error_list.append(message)
 
 def _scan(directories,diskname,filetypes):
     'the actual scanner, needed for recursion'
