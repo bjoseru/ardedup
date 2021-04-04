@@ -124,8 +124,8 @@ Unique SHA1s                  9575
 Image files (non-unique)      13295
 Image files (unique)          5267
 Image dhash128 (unique)       5035
-Combined file sizes          10G
-Combined image file sizes    8G
+Combined file sizes           10G
+Combined image file sizes     8G
 Total storage used            5G
 Total storage used by images  5G
 ```

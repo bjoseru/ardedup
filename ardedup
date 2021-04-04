@@ -73,7 +73,7 @@ def cleanup():
         typer.echo("I encountered the following problems:")
         for e in error_list:
             typer.echo(e)
-    print('Bye now.')
+    # print('Bye now.')
 
 atexit.register(cleanup)
 # atexit.register(db.close)
@@ -114,17 +114,33 @@ def get_info(diskname: str, de: os.DirEntry):
             image.close()
         except OSError:
             pass
+
+
+    size, dev, atime, ctime, mtime = (None, ) * 5
+
+    try:
+        size = de.stat().st_size
+        dev = de.stat().st_dev
+        atime = de.stat().st_atime_ns
+        ctime = de.stat().st_ctime_ns
+        mtime = de.stat().st_mtime_ns
+    except FileNotFoundError:
+        typer.echo()
+        message = fr'Issue get STAT for file: "{de.path}"'
+        typer.echo(typer.style(message,bg="red",fg="white"))
+        error_list.append(message)
         
+    
     return File(**{
         'path': pathlib.Path(de.path).absolute().__str__(),
-        'size': de.stat().st_size,
+        'size': size,
         'imgtype': imgtype,
         'dhash128': dhash128,
         'diskname': diskname,
-        'dev': de.stat().st_dev,
-        'atime': de.stat().st_atime_ns,  # Time of most recent access expressed in nanoseconds as an integer
-        'ctime': de.stat().st_ctime_ns,  # Time of most recent content modification expressed in nanoseconds as an integer
-        'mtime': de.stat().st_mtime_ns,  # the time of most recent metadata change on Unix / the time of creation on Windows, expressed in nanoseconds as an integer
+        'dev': dev,
+        'atime': atime,  # Time of most recent access expressed in nanoseconds as an integer
+        'ctime': ctime,  # Time of most recent content modification expressed in nanoseconds as an integer
+        'mtime': mtime,  # the time of most recent metadata change on Unix / the time of creation on Windows, expressed in nanoseconds as an integer
         'sha1': sha1,
         'im_mode' : im_mode,
         'im_size' : im_size,        
@@ -162,7 +178,7 @@ def _scan(directories,diskname,filetypes):
     'the actual scanner, needed for recursion'
     for directory in directories:
         try:
-            if not os.stat(directory).is_dir():
+            if not os.path.isdir(directory):
                 print(f'"{directory}" does not appear to be a directory, skipping')
                 continue
         except FileNotFoundError:
@@ -233,7 +249,7 @@ def scan(
             indicate the source disk (e.g., when cataloging a large
             set of external hard drives, which was the motivation for
             this software).""")),
-        filetypes: str = typer.Option(r'rgb|gif|pbm|pgm|ppm|tiff?|rast|xbm|jpe?g|bmp|png|webp|exr|docx?|odf|pdf|rtf|txt',
+        filetypes: str = typer.Option(r'rgb|gif|pbm|pgm|ppm|tiff?|rast|xbm|jpe?g|bmp|png|webp|exr|docx?|odf|odt|pdf|rtf|txt|xlsx?',
 
             help=re.sub("\s\s+" , " ", """A regular expression listing the file formats to archive. 
             This would commonly be a subset of the image formats listed here 
@@ -385,7 +401,10 @@ def callback():
 
     
 if __name__ == "__main__":
-    app()
+    try:
+        app()
+    except BrokenPipeError:
+        cleanup()
 
 
 # Local Variables:
