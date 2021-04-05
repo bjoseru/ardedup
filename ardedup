@@ -112,7 +112,7 @@ def get_info(diskname: str, de: os.DirEntry):
             im_size = image.size
             dhash128 = dhash.format_hex(row, col)
             image.close()
-        except OSError:
+        except Exception:  # yes, I don't care what exception is caught here, and it doesn't matter; in summary, we don't have a dhash128
             pass
 
 
@@ -198,6 +198,9 @@ def _scan(directories,diskname,filetypes):
         with os.scandir(directory) as dir:
             copied = 0
             for entry in tqdm.tqdm(dir, desc = f'{colorama.Style.DIM}{directory.absolute()}{colorama.Style.RESET_ALL}', leave=True, colour='#555500', total=os.stat(directory).st_nlink-2):
+                if db.contains((Entry.path == str(pathlib.Path(entry.path).absolute())) & (Entry.disk == str(diskname))) or \
+                   scanned_dirs.contains((Entry.dir == str(pathlib.Path(entry.path).absolute())) & (Entry.disk == str(diskname))):
+                    continue
                 if entry.is_dir():
                     subdirs.append(entry.path)
                     # print(f'add "{entry.path}" to scan list')
@@ -403,7 +406,7 @@ def callback():
 if __name__ == "__main__":
     try:
         app()
-    except BrokenPipeError:
+    except BrokenPipeError as e:
         cleanup()
 
 
